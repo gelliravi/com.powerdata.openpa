@@ -6,6 +6,7 @@ import java.util.Collection;
 import java.util.Iterator;
 import com.powerdata.openpa.Bus;
 import com.powerdata.openpa.BusList;
+import com.powerdata.openpa.BusRefIndex;
 import com.powerdata.openpa.Island;
 import com.powerdata.openpa.PAModelException;
 import com.powerdata.openpa.tools.PAMath;

@@ -6,9 +6,12 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
+import com.powerdata.openpa.ACBranch;
 import com.powerdata.openpa.ACBranchList;
+import com.powerdata.openpa.ACBranchListIfc;
 import com.powerdata.openpa.Bus;
 import com.powerdata.openpa.BusList;
+import com.powerdata.openpa.BusRefIndex;
 import com.powerdata.openpa.FixedShunt;
 import com.powerdata.openpa.FixedShuntListIfc;
 import com.powerdata.openpa.Gen;
@@ -17,12 +20,15 @@ import com.powerdata.openpa.Island;
 import com.powerdata.openpa.IslandList;
 import com.powerdata.openpa.Load;
 import com.powerdata.openpa.LoadList;
+import com.powerdata.openpa.OneTermDev;
+import com.powerdata.openpa.OneTermDevListIfc;
 import com.powerdata.openpa.PAModel;
 import com.powerdata.openpa.PAModelException;
 import com.powerdata.openpa.PflowModelBuilder;
 import com.powerdata.openpa.SVCList;
 import com.powerdata.openpa.SubLists;
 import com.powerdata.openpa.pwrflow.ACBranchFlows.ACBranchFlow;
+import com.powerdata.openpa.tools.ACBranchByType;
 import com.powerdata.openpa.tools.FactorizedFltMatrix;
 import com.powerdata.openpa.tools.PAMath;
 import com.powerdata.openpa.tools.SpSymMtrxFactPattern;
@@ -81,12 +87,10 @@ public class FDPowerFlow
 	VoltageSetPoint _vsp;
 	/** energized islands */
 	IslandList _hotislands;
-	/** Active generators */
-	GenList _actvgen;
-	/** active generators controlling voltage (ordered as _actvgen) */
-	boolean[] _isavr;
 	/** active loads */
-	LoadList _actvload;
+	Active1TData _actvld;
+	/** active generators */
+	ActiveGenData _actvgen;
 	/** SVC calculator */
 	SVCCalcList _svc;
 	/** fixed shunt calculators */
@@ -100,6 +104,36 @@ public class FDPowerFlow
 	/** resulting voltage angles (rad) */
 	float[] _va;
 	
+	/** Provide appropriate data access for 1-terminal device data during mismatch calculations */
+	@FunctionalInterface
+	interface ActiveDataAccess
+	{
+		float[] get() throws PAModelException;
+	}
+	
+	/** Cache some load data for faster access */
+	private class Active1TData
+	{
+		int[] bus;
+		float[] p, q;
+		Active1TData(OneTermDevListIfc<? extends OneTermDev> actvdata, ActiveDataAccess pa, ActiveDataAccess qa)
+			throws PAModelException
+		{
+			bus = _bri.get1TBus(actvdata);
+			p = pa.get();
+			q = qa.get();
+		}
+	}
+	private class ActiveGenData extends Active1TData
+	{
+		boolean[] inavr;
+		ActiveGenData(GenList actvgen, boolean[] inavr) throws PAModelException
+		{
+			super(actvgen, () -> actvgen.getPS(), () -> actvgen.getQS());
+			this.inavr = inavr;
+		}
+	}
+	
 	public FDPowerFlow(PAModel model, BusRefIndex bri) throws PAModelException
 	{
 		_model = model;
@@ -110,8 +144,10 @@ public class FDPowerFlow
 		
 		/* build AC branch calculators (one for each dev type) */
 		for(ACBranchList l : model.getACBranches())
+		{
 			_brcalc.add(new ACBranchFlowsSubList(new ACBranchFlowsI(l, _bri),
 				SubLists.getInServiceIndexes(l)));
+		}
 		
 		/* build adjacency matrix */
 		_adj = new ACBranchAdjacencies<>(_brcalc, 
@@ -151,9 +187,10 @@ public class FDPowerFlow
 		
 		 _vsp = new VoltageSetPoint(_pvbuses, _buses, _model.getIslands().size());
 		
-		/** set up lists for remaining equipment */
-		_actvload = SubLists.getLoadInsvc(_model.getLoads());
-
+		/* set up lists for remaining equipment */
+		 LoadList loads = SubLists.getLoadInsvc(_model.getLoads());
+		 _actvld = new Active1TData(loads, () -> loads.getP(), () -> loads.getQ());
+		 
 		/* set up the fixed shunt calculators */
 		for(FixedShuntListIfc<? extends FixedShunt> fsh : shInSvc)
 			_fshcalc.add(new FixedShuntCalcList(fsh, _bri));
@@ -211,8 +248,9 @@ public class FDPowerFlow
 			}
 		}
 		_hotislands = SubLists.getIslandSublist(islands, Arrays.copyOf(idx, nhot));
-		_actvgen = SubLists.getGenSublist(_model.getGenerators(), Arrays.copyOf(pidx, np));
-		_isavr = Arrays.copyOf(qidx, np);
+		_actvgen = new ActiveGenData(SubLists.getGenSublist(
+			_model.getGenerators(), Arrays.copyOf(pidx, np)),
+			Arrays.copyOf(qidx, np));
 	}
 
 	FactorizedFltMatrix getBDblPrime()
@@ -324,29 +362,33 @@ public class FDPowerFlow
 			r.reportMismatch(pmm, qmm, vm, va, _btu.getTypes());
 	}
 
-
 	void applyLoadMism(Mismatch pmm, Mismatch qmm) throws PAModelException
 	{
 		float[] p = pmm.get(), q = qmm.get();
-		for(Load l : _actvload)
+		int[] bus = _actvld.bus;
+		int n = bus.length;
+		float[] lp = _actvld.p, lq = _actvld.q;
+		for(int i=0; i < n; ++i)
 		{
-			int b = _buses.getByBus(l.getBus()).getIndex();
-			p[b] -= PAMath.mva2pu(l.getP(), _sbase);
-			q[b] -= PAMath.mva2pu(l.getQ(), _sbase);
+			int b = bus[i];
+			p[b] -= PAMath.mva2pu(lp[i], _sbase);
+			q[b] -= PAMath.mva2pu(lq[i], _sbase);
 		}
 	}
 
 	void applyGenMism(Mismatch pmm, Mismatch qmm) throws PAModelException
 	{
 		float[] p = pmm.get(), q = qmm.get();
-		int ngen = _actvgen.size();
-		int[] bx = _bri.get1TBus(_actvgen);
+		int[] bx = _actvgen.bus;
+		int ngen = bx.length;
+		float[] pg = PAMath.mva2pu(_actvgen.p, _sbase);
+		float[] qg = PAMath.mva2pu(_actvgen.q, _sbase);
+		boolean[] isavr = _actvgen.inavr;
 		for(int i=0; i < ngen; ++i)
 		{
-			Gen g = _actvgen.get(i);
 			int b = bx[i];
-			p[b] -= PAMath.mva2pu(g.getPS(), _sbase);
-			if(!_isavr[i]) q[b] -= PAMath.mva2pu(g.getQS(), _sbase);
+			p[b] -= pg[i];
+			if(!isavr[i]) q[b] -= qg[i];
 		}
 	}
 	
@@ -419,7 +461,7 @@ public class FDPowerFlow
 //		bldr.enableRCorrection(true);
 		PAModel m = bldr.load();
 
-		FDPowerFlow pf = new FDPowerFlow(m, BusRefIndex.CreateFromSingleBus(m));
+		FDPowerFlow pf = new FDPowerFlow(m, BusRefIndex.CreateFromSingleBuses(m));
 		pf.addMismatchReporter(new PFMismatchDbg(outdir));
 		ConvergenceList results = pf.runPF();
 		results.forEach(l -> System.out.println(l));
