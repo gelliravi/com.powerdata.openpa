@@ -22,13 +22,13 @@ public class GenVarMonitor
 	@FunctionalInterface
 	public interface Action
 	{
-		void take(Bus bus, float qinj);
+		void take(Bus bus, float qinj) throws PAModelException;
 	}
 	
 	@FunctionalInterface
 	interface Monitor
 	{
-		boolean test(float mm, int i);
+		boolean test(float mm, int i) throws PAModelException;
 	}
 
 	SpSymFltMatrix _bpp;
@@ -47,7 +47,7 @@ public class GenVarMonitor
 	Monitor _pvmonlow = new Monitor()
 	{
 		@Override
-		public boolean test(float mm, int i)
+		public boolean test(float mm, int i) throws PAModelException
 		{
 			boolean rv = false;
 			if(mm < _minq[i])
@@ -64,7 +64,7 @@ public class GenVarMonitor
 	Monitor _pvmonhi = new Monitor()
 	{
 		@Override
-		public boolean test(float mm, int i)
+		public boolean test(float mm, int i) throws PAModelException
 		{
 			boolean rv = false;
 			if(mm > _maxq[i])
@@ -132,26 +132,30 @@ public class GenVarMonitor
 		_maxq = new float[nbus];
 		_viol = new boolean[nbus];
 		
-		for(Bus bus : _pvbuses)
+		for(int i=0; i < nbus; ++i)
 		{
+			Bus bus = _pvbuses.get(i);
 			float mnq=0f, mxq=0f;
-			int bx = bus.getIndex();
+//			int bx = bus.getIndex();
 			for(Gen g : bus.getGenerators())
 			{
-				mnq += PAMath.mva2pu(g.getMinQ(), _sbase);
-				mxq += PAMath.mva2pu(g.getMaxQ(), _sbase);
+				if(g.isGenerating() && g.isRegKV())
+				{
+					mnq += PAMath.mva2pu(g.getMinQ(), _sbase);
+					mxq += PAMath.mva2pu(g.getMaxQ(), _sbase);
+				}
 			}
-			_minq[bx] = mnq;
-			_maxq[bx] = mxq;
+			_minq[i] = mnq;
+			_maxq[i] = mxq;
 		}
 	}
 	
-	public void monitor(Mismatch qmm)
+	public void monitor(Mismatch qmm) throws PAModelException
 	{
 		float[] mm = qmm.get();
 		int n = _pvbuses.size();
 		for(int i=0; i < n; ++i)
-			_monitors[i].test(mm[i], i);
+			_monitors[i].test(mm[_pvbuses.getIndex(i)], i);
 	}
 	
 	

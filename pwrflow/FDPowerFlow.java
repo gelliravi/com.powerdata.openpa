@@ -6,6 +6,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
+
 import com.powerdata.openpa.ACBranch;
 import com.powerdata.openpa.ACBranchList;
 import com.powerdata.openpa.ACBranchListIfc;
@@ -28,6 +29,7 @@ import com.powerdata.openpa.PflowModelBuilder;
 import com.powerdata.openpa.SVCList;
 import com.powerdata.openpa.SubLists;
 import com.powerdata.openpa.pwrflow.ACBranchFlows.ACBranchFlow;
+import com.powerdata.openpa.pwrflow.GenVarMonitor.Action;
 import com.powerdata.openpa.tools.ACBranchByType;
 import com.powerdata.openpa.tools.FactorizedFltMatrix;
 import com.powerdata.openpa.tools.PAMath;
@@ -96,7 +98,7 @@ public class FDPowerFlow
 	/** fixed shunt calculators */
 	ArrayList<FixedShuntCalcList> _fshcalc = new ArrayList<>();
 	/** monitor vars */
-	//TODO:  GenVarMonitor _varmon;
+	GenVarMonitor _varmon;
 	/** report mismatches externally */
 	List<PFMismatchReporter> _mmreport = new ArrayList<>();
 	/** resulting voltage magnitudes (p.u.) */
@@ -194,6 +196,8 @@ public class FDPowerFlow
 		/* set up the fixed shunt calculators */
 		for(FixedShuntListIfc<? extends FixedShunt> fsh : shInSvc)
 			_fshcalc.add(new FixedShuntCalcList(fsh, _bri));
+		
+		_varmon = new GenVarMonitor(_bdblprime_mtrx,_pvbuses, _cvtpvpq, null);
 	}
 	
 	/**
@@ -262,6 +266,12 @@ public class FDPowerFlow
 		return _bDblPrime;
 	}
 	
+	Action _cvtpvpq = (b,q) ->
+	{
+		_bDblPrime = null;
+		_btu.changeType(BusType.PQ, b.getIndex(), b.getIsland().getIndex());
+	};
+	
 	static Collection<BusType> _ActvMismatchTypes = EnumSet.of(BusType.PQ, BusType.PV);
 	static Collection<BusType> _ReacMismatchTypes = EnumSet.of(BusType.PQ);
 	
@@ -301,6 +311,8 @@ public class FDPowerFlow
 			/* solve a new set of voltages and angles */
 			if (incomplete)
 			{
+				/* check for limit violations */
+				_varmon.monitor(qmm);
 				/* check remote-monitored buses and adjust any setpoints as needed */
 				_vsp.applyRemotes(_vm, rv);
 				/* correct magnitudes */

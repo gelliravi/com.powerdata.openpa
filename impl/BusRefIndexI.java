@@ -14,7 +14,7 @@ import com.powerdata.openpa.TwoTermDevListIfc;
 public class BusRefIndexI implements BusRefIndex
 {
 	@FunctionalInterface
-	private interface BusGroupResolver
+	public interface BusGroupResolver
 	{
 		int[] apply(BusList l, int[] b) throws PAModelException;
 	}
