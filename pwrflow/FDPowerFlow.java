@@ -7,9 +7,7 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 
-import com.powerdata.openpa.ACBranch;
 import com.powerdata.openpa.ACBranchList;
-import com.powerdata.openpa.ACBranchListIfc;
 import com.powerdata.openpa.Bus;
 import com.powerdata.openpa.BusList;
 import com.powerdata.openpa.BusRefIndex;
@@ -19,7 +17,6 @@ import com.powerdata.openpa.Gen;
 import com.powerdata.openpa.GenList;
 import com.powerdata.openpa.Island;
 import com.powerdata.openpa.IslandList;
-import com.powerdata.openpa.Load;
 import com.powerdata.openpa.LoadList;
 import com.powerdata.openpa.OneTermDev;
 import com.powerdata.openpa.OneTermDevListIfc;
@@ -30,7 +27,6 @@ import com.powerdata.openpa.SVCList;
 import com.powerdata.openpa.SubLists;
 import com.powerdata.openpa.pwrflow.ACBranchFlows.ACBranchFlow;
 import com.powerdata.openpa.pwrflow.GenVarMonitor.Action;
-import com.powerdata.openpa.tools.ACBranchByType;
 import com.powerdata.openpa.tools.FactorizedFltMatrix;
 import com.powerdata.openpa.tools.PAMath;
 import com.powerdata.openpa.tools.SpSymMtrxFactPattern;
@@ -80,8 +76,6 @@ public class FDPowerFlow
 	float _tol = 0.005f;
 	/** system MVA base */
 	float _sbase = 100f;
-	/** PV Buses */
-	BusList _pvbuses;
 	/** system Buses (single-bus view) */
 	BusList _buses;
 	/** Track the voltage set points for PV buses.  Note that remote regulated buses
@@ -179,15 +173,17 @@ public class FDPowerFlow
 		_bdblprime_mtrx = new BDblPrime<ACBranchFlow>(_adj, shInSvc, _svc, _bri);
 		
 		/* Build a list of buses with type PV */
-		_pvbuses = SubLists.getBusSublist(_buses, 
+		BusList pvbuses = SubLists.getBusSublist(_buses, 
 			_btu.getBuses(BusType.PV));
 		
-		for(Bus b : _pvbuses)
+		_varmon = new GenVarMonitor(_bdblprime_mtrx,pvbuses, _cvtpvpq, null);
+
+		for(Bus b : pvbuses)
 			_bdblprime_mtrx.incBdiag(b.getIndex(), 1e+06f);
 		
 		setupHotIslands();
 		
-		 _vsp = new VoltageSetPoint(_pvbuses, _buses, _model.getIslands().size());
+		 _vsp = new VoltageSetPoint(pvbuses, _buses, _model.getIslands().size());
 		
 		/* set up lists for remaining equipment */
 		 LoadList loads = SubLists.getLoadInsvc(_model.getLoads());
@@ -197,7 +193,6 @@ public class FDPowerFlow
 		for(FixedShuntListIfc<? extends FixedShunt> fsh : shInSvc)
 			_fshcalc.add(new FixedShuntCalcList(fsh, _bri));
 		
-		_varmon = new GenVarMonitor(_bdblprime_mtrx,_pvbuses, _cvtpvpq, null);
 	}
 	
 	/**
@@ -312,7 +307,7 @@ public class FDPowerFlow
 			if (incomplete)
 			{
 				/* check for limit violations */
-				_varmon.monitor(qmm);
+//				_varmon.monitor(qmm);
 				/* check remote-monitored buses and adjust any setpoints as needed */
 				_vsp.applyRemotes(_vm, rv);
 				/* correct magnitudes */

@@ -43,43 +43,21 @@ public class GenVarMonitor
 	Monitor[] _monitors;
 	/** no monitoring */
 	Monitor _nomon = (i,j) -> false;
-	/** Monitor low pv bus limits and convert if needed */
-	Monitor _pvmonlow = new Monitor()
-	{
-		@Override
-		public boolean test(float mm, int i) throws PAModelException
-		{
-			boolean rv = false;
-			if(mm < _minq[i])
-			{
-				cvtPV2PQ(i);
-				_pv2pq.take(_pvbuses.get(i), mm);
-				rv = true;
-			}
-			return rv;
-		}
-	};
-
-	/** Monitor high pv bus limits and convert if needed */
-	Monitor _pvmonhi = new Monitor()
-	{
-		@Override
-		public boolean test(float mm, int i) throws PAModelException
-		{
-			boolean rv = false;
-			if(mm > _maxq[i])
-			{
-				cvtPV2PQ(i);
-				_pv2pq.take(_pvbuses.get(i), mm);
-				rv = true;
-			}
-			return rv;
-		}
-	};
-
 	/** Action to take to convert pv to pq */
 	Action _pv2pq;
 	
+	/** Monitor low pv bus limits and convert if needed */
+	Monitor _pvmon = (mm,i) -> 
+	{
+		boolean rv = false;
+		if(mm < _minq[i] || mm > _maxq[i])
+		{
+			cvtPV2PQ(i);
+			_pv2pq.take(_pvbuses.get(i), mm);
+			rv = true;
+		}
+		return rv;
+	};
 	
 	public GenVarMonitor(SpSymFltMatrix bpp, BusList pvbuses, Action pv2pq,
 			Action pq2pv) throws PAModelException
@@ -92,16 +70,16 @@ public class GenVarMonitor
 		for(int i=0; i < nbus; ++i)
 			_pvidx[i] = _pvbuses.get(i).getIndex();
 			
+		_pv2pq = pv2pq;
 		saveOriginalB();
 		setupMonitors();
 		configureLimits();
-		_pv2pq = pv2pq;
 	}
 	
 	void setupMonitors()
 	{
 		_monitors = new Monitor[_pvbuses.size()];
-		Arrays.fill(_monitors, _pv2pq);
+		Arrays.fill(_monitors, _pvmon);
 	}
 
 	void cvtPV2PQ(int i)
