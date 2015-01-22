@@ -307,7 +307,6 @@ public class FDPowerFlow
 			if (incomplete)
 			{
 				/* check for limit violations */
-
 				_varmon.monitor(qmm, rv);
 				/* check remote-monitored buses and adjust any setpoints as needed */
 				_vsp.applyRemotes(_vm, rv);
