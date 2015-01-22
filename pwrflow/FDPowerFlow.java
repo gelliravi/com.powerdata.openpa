@@ -176,12 +176,12 @@ public class FDPowerFlow
 		BusList pvbuses = SubLists.getBusSublist(_buses, 
 			_btu.getBuses(BusType.PV));
 		
-		_varmon = new GenVarMonitor(_bdblprime_mtrx,pvbuses, _cvtpvpq, null);
+		setupHotIslands();
+		
+		_varmon = new GenVarMonitor(_bdblprime_mtrx,pvbuses, _hotislands, _cvtpvpq, null);
 
 		for(Bus b : pvbuses)
 			_bdblprime_mtrx.incBdiag(b.getIndex(), 1e+06f);
-		
-		setupHotIslands();
 		
 		 _vsp = new VoltageSetPoint(pvbuses, _buses, _model.getIslands().size());
 		
@@ -307,7 +307,8 @@ public class FDPowerFlow
 			if (incomplete)
 			{
 				/* check for limit violations */
-//				_varmon.monitor(qmm);
+
+				_varmon.monitor(qmm, rv);
 				/* check remote-monitored buses and adjust any setpoints as needed */
 				_vsp.applyRemotes(_vm, rv);
 				/* correct magnitudes */

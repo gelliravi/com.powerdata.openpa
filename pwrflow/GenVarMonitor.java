@@ -1,10 +1,17 @@
 package com.powerdata.openpa.pwrflow;
 
+import gnu.trove.map.hash.TIntIntHashMap;
+
 import java.util.Arrays;
+import java.util.List;
+
 import com.powerdata.openpa.Bus;
 import com.powerdata.openpa.BusList;
 import com.powerdata.openpa.Gen;
+import com.powerdata.openpa.IslandList;
 import com.powerdata.openpa.PAModelException;
+import com.powerdata.openpa.impl.BasicBusGrpMap;
+import com.powerdata.openpa.pwrflow.ConvergenceList.ConvergenceInfo;
 import com.powerdata.openpa.tools.PAMath;
 import com.powerdata.openpa.tools.SpSymFltMatrix;
 
@@ -45,6 +52,8 @@ public class GenVarMonitor
 	Monitor _nomon = (i,j) -> false;
 	/** Action to take to convert pv to pq */
 	Action _pv2pq;
+	/** track pv bus to hot island index */
+	List<int[]> _busbyisland;
 	
 	/** Monitor low pv bus limits and convert if needed */
 	Monitor _pvmon = (mm,i) -> 
@@ -59,7 +68,7 @@ public class GenVarMonitor
 		return rv;
 	};
 	
-	public GenVarMonitor(SpSymFltMatrix bpp, BusList pvbuses, Action pv2pq,
+	public GenVarMonitor(SpSymFltMatrix bpp, BusList pvbuses, IslandList hotislands, Action pv2pq,
 			Action pq2pv) throws PAModelException
 	{
 		_bpp = bpp;
@@ -67,9 +76,21 @@ public class GenVarMonitor
 		/* save the original buses for each PV bus in the list */
 		int nbus = pvbuses.size();
 		_pvidx = new int[nbus];
+		/* correlate the pvbuses with appropriate hot island */
+		int nhot = hotislands.size();
+		TIntIntHashMap imap = new TIntIntHashMap(nhot, 0.5f, -1, -1);
+		for(int ii=0; ii < nhot; ++ii)
+			imap.put(hotislands.getIndex(ii), ii);
+		
+		int[] bmap = new int[nbus];
+		
 		for(int i=0; i < nbus; ++i)
-			_pvidx[i] = _pvbuses.get(i).getIndex();
-			
+		{
+			Bus b = _pvbuses.get(i);
+			_pvidx[i] = b.getIndex();
+			bmap[i] = imap.get(b.getIsland().getIndex());
+		}
+		_busbyisland = new BasicBusGrpMap(bmap, nhot).map();
 		_pv2pq = pv2pq;
 		saveOriginalB();
 		setupMonitors();
@@ -128,12 +149,26 @@ public class GenVarMonitor
 		}
 	}
 	
-	public void monitor(Mismatch qmm) throws PAModelException
+	public void monitor(Mismatch qmm, ConvergenceList rv) throws PAModelException
 	{
 		float[] mm = qmm.get();
-		int n = _pvbuses.size();
-		for(int i=0; i < n; ++i)
-			_monitors[i].test(mm[_pvbuses.getIndex(i)], i);
+		int nrv = rv.size();
+		for(int irv = 0; irv < nrv; ++irv)
+		{
+			ConvergenceInfo ci = rv.get(irv);
+			if (Math.abs(ci.getWorstQ().getValue()) < 0.1f)
+			{
+				for(int i : _busbyisland.get(irv))
+				{
+					_monitors[i].test(mm[_pvbuses.getIndex(i)], i);
+				}
+			}
+		}
+//		int n = _pvbuses.size();
+//		for(int i=0; i < n; ++i)
+//		{
+//			_monitors[i].test(mm[_pvbuses.getIndex(i)], i);
+//		}
 	}
 	
 	
