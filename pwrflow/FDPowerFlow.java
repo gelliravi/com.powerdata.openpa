@@ -110,23 +110,35 @@ public class FDPowerFlow
 	/** Cache some load data for faster access */
 	private class Active1TData
 	{
-		int[] bus;
-		float[] p, q;
+		private int[] _bus;
+		float[] _p;
+		ActiveDataAccess _qa;
 		Active1TData(OneTermDevListIfc<? extends OneTermDev> actvdata, ActiveDataAccess pa, ActiveDataAccess qa)
 			throws PAModelException
 		{
-			bus = _bri.get1TBus(actvdata);
-			p = pa.get();
-			q = qa.get();
+			_bus = _bri.get1TBus(actvdata);
+			_p = pa.get();
+			_qa = qa;
 		}
+		
+		float[] getP() throws PAModelException {return _p;}
+		float[] getQ() throws PAModelException {return _qa.get();}
+		int[] getBus() {return _bus;}
+		
 	}
 	private class ActiveGenData extends Active1TData
 	{
+		int[] revidx;
 		boolean[] inavr;
-		ActiveGenData(GenList actvgen, boolean[] inavr) throws PAModelException
+		ActiveGenData(GenList actvgen, boolean[] inavr, int[] revidx) throws PAModelException
 		{
 			super(actvgen, () -> actvgen.getPS(), () -> actvgen.getQS());
 			this.inavr = inavr;
+			this.revidx = revidx;
+		}
+		void stopAVR(Gen g)
+		{
+			inavr[revidx[g.getIndex()]] = false;
 		}
 	}
 	
@@ -157,7 +169,6 @@ public class FDPowerFlow
 		SVCList[] psvc = partitionSVCs();
 		SVCList nonPvSvc = psvc[1];
 		_svc = new SVCCalcList(nonPvSvc, _bri);
-		
 
 		/* organize the model into bus types and select reference buses for each island */
 		//TODO:  Externalize BusTypeUtil creation so that it can be created once for multiple uses
@@ -178,7 +189,7 @@ public class FDPowerFlow
 		
 		setupHotIslands();
 		
-		_varmon = new GenVarMonitor(_bdblprime_mtrx,pvbuses, _hotislands, _cvtpvpq, null);
+		_varmon = new GenVarMonitor(_bdblprime_mtrx, pvbuses, _hotislands, _cvtpvpq, null);
 
 		for(Bus b : pvbuses)
 			_bdblprime_mtrx.incBdiag(b.getIndex(), 1e+06f);
@@ -228,6 +239,8 @@ public class FDPowerFlow
 		int ngen = gens.size(), np=0;
 		int[] pidx = new int[ngen];
 		boolean[] qidx = new boolean[ngen];
+		int[] revidx = new int[ngen];
+		Arrays.fill(revidx, -1);
 		
 		for(Island island : islands)
 		{
@@ -241,7 +254,9 @@ public class FDPowerFlow
 						h = true;
 						idx[nhot++] = island.getIndex();
 					}
-					pidx[np] = g.getIndex();
+					int lx = g.getIndex();
+					pidx[np] = lx;
+					revidx[lx] = np;
 					qidx[np++] = g.isRegKV();
 				}
 			}
@@ -249,7 +264,7 @@ public class FDPowerFlow
 		_hotislands = SubLists.getIslandSublist(islands, Arrays.copyOf(idx, nhot));
 		_actvgen = new ActiveGenData(SubLists.getGenSublist(
 			_model.getGenerators(), Arrays.copyOf(pidx, np)),
-			Arrays.copyOf(qidx, np));
+			Arrays.copyOf(qidx, np), revidx);
 	}
 
 	FactorizedFltMatrix getBDblPrime()
@@ -261,10 +276,23 @@ public class FDPowerFlow
 		return _bDblPrime;
 	}
 	
+	@FunctionalInterface
+	private interface GetFloat<T>
+	{
+		float get(T o) throws PAModelException;
+	}
+
 	Action _cvtpvpq = (b,q) ->
 	{
 		_bDblPrime = null;
 		_btu.changeType(BusType.PQ, b.getIndex(), b.getIsland().getIndex());
+		GetFloat<Gen> fv = (q > 0f) ? j -> j.getMaxQ() : j -> j.getMinQ();
+		for(Gen g : b.getGenerators())
+		{
+			float f = fv.get(g);
+			_actvgen.stopAVR(g);
+			g.setQS(f);
+		}
 	};
 	
 	static Collection<BusType> _ActvMismatchTypes = EnumSet.of(BusType.PQ, BusType.PV);
@@ -307,7 +335,7 @@ public class FDPowerFlow
 			if (incomplete)
 			{
 				/* check for limit violations */
-				_varmon.monitor(qmm, rv);
+//				_varmon.monitor(qmm, rv);
 				/* check remote-monitored buses and adjust any setpoints as needed */
 				_vsp.applyRemotes(_vm, rv);
 				/* correct magnitudes */
@@ -372,9 +400,9 @@ public class FDPowerFlow
 	void applyLoadMism(Mismatch pmm, Mismatch qmm) throws PAModelException
 	{
 		float[] p = pmm.get(), q = qmm.get();
-		int[] bus = _actvld.bus;
+		int[] bus = _actvld._bus;
 		int n = bus.length;
-		float[] lp = _actvld.p, lq = _actvld.q;
+		float[] lp = _actvld.getP(), lq = _actvld.getQ();
 		for(int i=0; i < n; ++i)
 		{
 			int b = bus[i];
@@ -386,16 +414,17 @@ public class FDPowerFlow
 	void applyGenMism(Mismatch pmm, Mismatch qmm) throws PAModelException
 	{
 		float[] p = pmm.get(), q = qmm.get();
-		int[] bx = _actvgen.bus;
+		int[] bx = _actvgen.getBus();
 		int ngen = bx.length;
-		float[] pg = PAMath.mva2pu(_actvgen.p, _sbase);
-		float[] qg = PAMath.mva2pu(_actvgen.q, _sbase);
+		float[] pg = PAMath.mva2pu(_actvgen.getP(), _sbase);
+		float[] qg = PAMath.mva2pu(_actvgen.getQ(), _sbase);
 		boolean[] isavr = _actvgen.inavr;
 		for(int i=0; i < ngen; ++i)
 		{
 			int b = bx[i];
 			p[b] -= pg[i];
-			if(!isavr[i]) q[b] -= qg[i];
+			if(!isavr[i]) 
+				q[b] -= qg[i];
 		}
 	}
 	
