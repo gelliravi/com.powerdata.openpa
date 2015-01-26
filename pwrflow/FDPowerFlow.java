@@ -136,9 +136,16 @@ public class FDPowerFlow
 			this.inavr = inavr;
 			this.revidx = revidx;
 		}
-		void stopAVR(Gen g)
+		/**
+		 * Toggle the AVR state of the given generator 
+		 * @return true if the generate was active, false otherwise
+		 */
+		boolean stopAVR(Gen g)
 		{
+			int rx = revidx[g.getIndex()];
+			if (rx == -1) return false;
 			inavr[revidx[g.getIndex()]] = false;
+			return true;
 		}
 	}
 	
@@ -289,9 +296,10 @@ public class FDPowerFlow
 		GetFloat<Gen> fv = (q > 0f) ? j -> j.getMaxQ() : j -> j.getMinQ();
 		for(Gen g : b.getGenerators())
 		{
-			float f = fv.get(g);
-			_actvgen.stopAVR(g);
-			g.setQS(f);
+			if(_actvgen.stopAVR(g))
+			{
+				g.setQS(fv.get(g));
+			}
 		}
 	};
 	
@@ -494,13 +502,16 @@ public class FDPowerFlow
 		PflowModelBuilder bldr = PflowModelBuilder.Create(uri);
 		bldr.enableFlatVoltage(true);
 		bldr.setLeastX(0.0001f);
+//		bldr.setUnitRegOverride(true);
 //		bldr.enableRCorrection(true);
 		PAModel m = bldr.load();
 
 		FDPowerFlow pf = new FDPowerFlow(m, BusRefIndex.CreateFromSingleBuses(m));
 		pf.addMismatchReporter(new PFMismatchDbg(outdir));
+		pf.setMaxIterations(400);
 		ConvergenceList results = pf.runPF();
 		results.forEach(l -> System.out.println(l));
+		new ListDumper().dumpList(new File("/tmp/branches.csv"), m.getLines());
 	}
 
 
